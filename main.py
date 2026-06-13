@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="學校全自動排課系統 Pro", layout="centered")
-st.title("📱 學校自動排課系統 (支援領域時間鎖定)")
+st.title("📱 學校自動排課系統 (終極全功能行政版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -21,12 +21,15 @@ for i in range(1, total_periods):
 if 'teachers_data' not in st.session_state:
     st.session_state.teachers_data = pd.DataFrame(columns=["老師姓名", "任教班級", "科目", "每週堂數", "需要連排(對/錯)"])
 if 'blocked_times' not in st.session_state:
-    st.session_state.blocked_times = {} # 個人/班級限制
+    st.session_state.blocked_times = {} 
 if 'subject_blocked_times' not in st.session_state:
-    st.session_state.subject_blocked_times = {} # 領域限制：{"數學": ["週二_第5節", "週二_第6節"]}
+    st.session_state.subject_blocked_times = {} 
+# 新增：固定課程儲存庫 格式: {"週五_第5節": "班會"}
+if 'fixed_lessons' not in st.session_state:
+    st.session_state.fixed_lessons = {}
 
 # 操作分頁
-main_tabs = st.tabs(["📥 1. 匯入資料", "🚫 2. 不排課與領域設定", "🚀 3. 智慧排課與匯出"])
+main_tabs = st.tabs(["📥 1. 匯入資料", "🚫 2. 各項排課限制設定", "🚀 3. 智慧排課與匯出"])
 
 # --- 頁面 1：匯入資料 ---
 with main_tabs[0]:
@@ -40,14 +43,40 @@ with main_tabs[0]:
         st.markdown("**目前資料庫概況：**")
         st.dataframe(st.session_state.teachers_data, use_container_width=True)
 
-# --- 頁面 2：不排課與領域設定 ---
+# --- 頁面 2：排課限制設定 ---
 with main_tabs[1]:
     class_list = sorted(list(set(st.session_state.teachers_data["任教班級"].dropna().astype(str)))) if not st.session_state.teachers_data.empty else []
     teacher_list = sorted(list(set(st.session_state.teachers_data["老師姓名"].dropna().astype(str)))) if not st.session_state.teachers_data.empty else []
     subject_list = sorted(list(set(st.session_state.teachers_data["科目"].dropna().astype(str)))) if not st.session_state.teachers_data.empty else []
     
-    # 區塊 A：領域共同時間鎖定
-    st.subheader("👥 2-1. 領域/科目共同不排課設定")
+    # 區塊 A：全校固定課程設定（新功能）
+    st.subheader("📌 2-1. 全校固定課程設定 (如班會、社團)")
+    st.write("設定後，**全校所有班級** 在該時段都會強制排入此課程：")
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1: fixed_day = st.selectbox("選擇星期", days, key="f_day")
+    with col_f2: fixed_period = st.selectbox("選擇節次", periods, key="f_per")
+    with col_f3: fixed_name = st.text_input("課程名稱", placeholder="例如：班會 或 社團課")
+    
+    if st.button("➕ 新增/更新固定課程", use_container_width=True):
+        if fixed_name:
+            slot_key = f"{fixed_day}_{fixed_period}"
+            st.session_state.fixed_lessons[slot_key] = fixed_name
+            st.toast(f"已設定 {fixed_day}{fixed_period} 為【{fixed_name}】")
+        else:
+            st.error("請輸入課程名稱！")
+            
+    if st.session_state.fixed_lessons:
+        st.markdown("**目前已設定的固定課程清單：**")
+        for k, v in list(st.session_state.fixed_lessons.items()):
+            d_p = k.split("_")
+            if st.button(f"🗑️ 刪除 {d_p[0]}{d_p[1]}：{v}", key=f"del_{k}"):
+                del st.session_state.fixed_lessons[k]
+                st.rerun()
+                
+    st.markdown("---")
+    
+    # 區塊 B：領域共同時間鎖定
+    st.subheader("👥 2-2. 領域/科目共同不排課設定")
     if subject_list:
         selected_subj = st.selectbox("選擇要設定領域會議的【科目】", ["請選擇"] + subject_list)
         if selected_subj != "請選擇":
@@ -64,13 +93,12 @@ with main_tabs[1]:
                 if st.checkbox(f"❌ {p} 領域時間", value=is_blocked, key=f"subj_{selected_subj}_{slot_id}"):
                     new_subj_blocks.append(slot_id)
             st.session_state.subject_blocked_times[selected_subj] = new_subj_blocks
-    else:
-        st.info("請先至步驟 1 上傳資料，系統會自動抓取科目清單。")
+    else: st.info("請先至步驟 1 上傳資料。")
         
     st.markdown("---")
     
-    # 區塊 B：個人與班級不排課
-    st.subheader("👤 2-2. 個人或班級特殊不排課設定")
+    # 區塊 C：個人與班級不排課
+    st.subheader("👤 2-3. 個人或班級特殊不排課設定")
     if class_list or teacher_list:
         target = st.selectbox("選擇對象（特定老師或個別班級）", ["請選擇"] + teacher_list + class_list)
         if target != "請選擇":
@@ -95,15 +123,16 @@ with main_tabs[2]:
         st.warning("請先完成資料匯入！")
     else:
         if st.button("🔥 啟動高級排課引擎", type="primary", use_container_width=True):
-            with st.spinner("智慧排課與領域時間媒合中..."):
+            with st.spinner("智慧排課與領域、固定課程進行媒合中..."):
                 schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
                 teacher_timetable = {(d, p): [] for d in days for p in periods}
                 teacher_schedules = {t: pd.DataFrame("", index=periods, columns=days) for t in teacher_list}
                 
-                # 建立 老師與科目 的對照表
-                teacher_subject_map = {}
-                for _, row in st.session_state.teachers_data.iterrows():
-                    teacher_subject_map[str(row["老師姓名"])] = str(row["科目"])
+                # 【核心步驟 1】：優先將全校「固定課程」填入每一班的課表
+                for slot_key, lesson_name in st.session_state.fixed_lessons.items():
+                    d, p = slot_key.split("_")
+                    for c in class_list:
+                        schedules[c].loc[p, d] = f"【{lesson_name}】"
                 
                 # 分類排課池 (連排與單堂)
                 double_lessons = []
@@ -116,18 +145,18 @@ with main_tabs[2]:
                     else:
                         for _ in range(hours): single_lessons.append({"class": c, "teacher": t, "subject": s})
                 
-                # 核心檢查函式（加入了領域時間檢查）
                 def can_place(c, t, s, d, p):
                     slot_str = f"{d}_{p}"
-                    # 1. 檢查領域/科目共同不排課限制
-                    if s in st.session_state.subject_blocked_times and slot_str in st.session_state.subject_blocked_times[s]:
-                        return False
-                    # 2. 檢查個人與班級不排課限制
+                    # 1. 檢查該格子是否已經被固定課程佔用
+                    if slot_str in st.session_state.fixed_lessons: return False
+                    # 2. 檢查領域/科目共同不排課限制
+                    if s in st.session_state.subject_blocked_times and slot_str in st.session_state.subject_blocked_times[s]: return False
+                    # 3. 檢查個人與班級不排課限制
                     if t in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[t]: return False
                     if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
-                    # 3. 檢查基本衝堂
+                    # 4. 檢查基本衝堂
                     if schedules[c].loc[p, d] != "" or t in teacher_timetable[(d, p)]: return False
-                    # 4. 檢查每日堂數限制
+                    # 5. 檢查每日堂數限制
                     if sum(1 for lesson in schedules[c][d].values if s in str(lesson)) >= 2: return False
                     return True
 
@@ -163,7 +192,7 @@ with main_tabs[2]:
                                 break
                         if placed: break
 
-                st.success("🎉 智慧排課完成（已成功避開所有領域會議時間）！")
+                st.success("🎉 智慧排課完成（已成功填入班會、社團等固定課程）！")
                 st.session_state.final_schedules = schedules
                 st.session_state.final_teacher_schedules = teacher_schedules
 
