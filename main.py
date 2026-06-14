@@ -166,4 +166,80 @@ with main_tabs[2]:
                     # 嚴格阻斷非連排同科目連堂
                     if not is_part_of_double:
                         if p_idx > 0 and s in str(schedules[c].loc[periods[p_idx-1], d]): return False
-                        if p_idx < len(periods)
+                        if p_idx < len(periods) - 1 and s in str(schedules[c].loc[periods[p_idx+1], d]): return False
+
+                    # 考科與藝能科半天數量配額控管
+                    is_morning = p_idx < 4
+                    half_day_periods = periods[:4] if is_morning else periods[4:]
+                    existing_count = sum(1 for p_name in half_day_periods if attr_schedules[c].loc[p_name, d] == attr)
+                    
+                    if attr == "考科" and (existing_count + required_slots) > 3: return False
+                    if attr == "藝能科" and (existing_count + required_slots) > 2: return False
+                            
+                    return True
+
+                # A. 排連排課
+                for lesson in double_lessons:
+                    c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
+                    placed = False
+                    for d in days:
+                        for p1, p2 in valid_pairs:
+                            if can_place(c, t, s, d, p1, attr, is_part_of_double=True) and can_place(c, t, s, d, p2, attr, is_part_of_double=True):
+                                schedules[c].loc[p1, d] = f"{s}\n({t})"
+                                schedules[c].loc[p2, d] = f"{s}連\n({t})"
+                                attr_schedules[c].loc[p1, d] = attr
+                                attr_schedules[c].loc[p2, d] = attr
+                                teacher_schedules[t].loc[p1, d] = f"{s}\n({c})"
+                                teacher_schedules[t].loc[p2, d] = f"{s}連\n({c})"
+                                teacher_timetable[(d, p1)].append(t)
+                                teacher_timetable[(d, p2)].append(t)
+                                placed = True
+                                break
+                        if placed: break
+
+                # B. 排單堂課
+                for lesson in single_lessons:
+                    c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
+                    placed = False
+                    for d in days:
+                        for p in periods:
+                            if can_place(c, t, s, d, p, attr, is_part_of_double=False):
+                                schedules[c].loc[p, d] = f"{s}\n({t})"
+                                attr_schedules[c].loc[p, d] = attr
+                                teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
+                                teacher_timetable[(d, p)].append(t)
+                                placed = True
+                                break
+                        if placed: break
+
+                st.success("🎉 智慧平衡排課完成！已成功套用『每日同科目上限 2 節』之行政防護。")
+                st.session_state.final_schedules = schedules
+                st.session_state.final_teacher_schedules = teacher_schedules
+
+        # 顯示與匯出結果
+        if 'final_schedules' in st.session_state:
+            st.markdown("### 📅 網頁線上查閱")
+            view_mode = st.radio("請選擇查閱模式", ["看班級課表", "看老師個人課表"])
+            if view_mode == "看班級課表":
+                view_c = st.selectbox("選擇班級", class_list)
+                st.dataframe(st.session_state.final_schedules[view_c], use_container_width=True)
+            else:
+                view_t = st.selectbox("選擇老師", teacher_list)
+                st.dataframe(st.session_state.final_teacher_schedules[view_t], use_container_width=True)
+            
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                for c_name, c_table in st.session_state.final_schedules.items():
+                    c_table.to_excel(writer, sheet_name=f"{c_name}_課表")
+                for t_name, t_table in st.session_state.final_teacher_schedules.items():
+                    t_table.to_excel(writer, sheet_name=f"{t_name}_課表")
+            
+            st.markdown("---")
+            st.download_button(
+                label="📥 匯出全校總課表 (Excel)",
+                data=output.getvalue(),
+                file_name="全校功課表總匯出結果.xlsx",
+                mime="application/vnd.ms-excel",
+                type="primary",
+                use_container_width=True
+            )
