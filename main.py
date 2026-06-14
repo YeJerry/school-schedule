@@ -407,4 +407,20 @@ with main_tabs[2]:
                 def convert_excel():
                     output_buffer = io.BytesIO()
                     with pd.ExcelWriter(output_buffer) as writer:
-                        for c_name, c_table in st.session_state.final_
+                        for c_name, c_table in st.session_state.final_schedules.items():
+                            clean_sheet_name = str(c_name).replace("/", "").replace("\\", "").replace("?", "").replace("*", "")[:20] + "_班"
+                            c_table.to_excel(writer, sheet_name=clean_sheet_name)
+                        for t_name, t_table in st.session_state.final_teacher_schedules.items():
+                            clean_sheet_name = str(t_name).replace("/", "").replace("\\", "").replace("?", "").replace("*", "")[:20] + "_師"
+                            t_table.to_excel(writer, sheet_name=clean_sheet_name)
+                    output_buffer.seek(0)
+                    return output_buffer.getvalue()
+
+                st.download_button(
+                    label="📥 匯出全校總課表 (Excel) - 已通過全校雙向護欄驗證",
+                    data=convert_excel(), 
+                    file_name="全校功課表總匯出結果_雙向防護完美版.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
