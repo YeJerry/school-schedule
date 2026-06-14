@@ -4,8 +4,8 @@ import io
 import random
 import traceback
 
-st.set_page_config(page_title="學校全自動排課系統 終極完美防禦版", layout="centered")
-st.title("📱 學校自動排課系統 (100%正課 ＋ 單日科目不超2節終極驗證版)")
+st.set_page_config(page_title="學校全自動排課系統 雙重護欄版", layout="centered")
+st.title("📱 學校自動排課系統 (班級不超2節 ＋ 老師一天最多5節驗證版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -38,10 +38,12 @@ if not st.session_state.teachers_data.empty:
     else:
         existing_domains = existing_subjects
 
-# 側邊欄：單日上限 1 節科目設定
+# 側邊欄設定
 st.sidebar.markdown("---")
-st.sidebar.header("🚫 限制優先級設定")
-st.sidebar.write("系統會自動迭代重排。系統已強制規定：全校任何科目單日【絕對不可超過 2 節】。")
+st.sidebar.header("🚫 行政安全限制摘要")
+st.sidebar.write("🛡️ 班級端：同班級單日同科目 <= 2節")
+st.sidebar.write("👨‍🏫 老師端：同老師單日全校總課量 <= 5節")
+
 max_one_per_day_subjects = []
 for sub in existing_subjects:
     is_default = sub in ["數學", "英文", "國文"]
@@ -132,7 +134,7 @@ with main_tabs[2]:
     else:
         if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True):
             try:
-                max_attempts = 300  # 提高隨機洗牌次數，因條件變嚴格
+                max_attempts = 500  # 限制變多，提高迭代次數上限
                 attempt = 0
                 success_fully_placed = False
                 
@@ -140,13 +142,17 @@ with main_tabs[2]:
                 
                 while attempt < max_attempts:
                     attempt += 1
-                    status_text.markdown(f"⏳ 正在進行第 **{attempt}** 次全校洗牌，嚴格驗證【100%排入】與【單日不超2節】...")
+                    status_text.markdown(f"⏳ 正在進行第 **{attempt}** 次全校洗牌，嚴格驗證【班級同科<=2節】與【老師單日<=5節】...")
                     
-                    # 1. 初始化每一輪的全新課表
+                    # 1. 初始化全校課表
                     schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
                     attr_schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
                     teacher_timetable = {(d, p): [] for d in days for p in periods}
                     teacher_schedules = {t: pd.DataFrame("", index=periods, columns=days) for t in teacher_list}
+                    
+                    # 用來即時追蹤每個老師每天在全校總共排了幾節課的計數器
+                    # 格式: { "張老師": { "週一": 0, "週二": 0, ... } }
+                    teacher_daily_count = {t: {d: 0 for d in days} for t in teacher_list}
                     
                     subj_to_domain = {}
                     for _, row in st.session_state.teachers_data.iterrows():
@@ -159,7 +165,7 @@ with main_tabs[2]:
                             if c_name.startswith(grade_prefix) and f"{d}_{p}" in slots: return slots[f"{d}_{p}"]
                         return None
 
-                    # 填入固定課程
+                    # 填入年級固定課程
                     for c in class_list:
                         for d in days:
                             for p in periods:
@@ -168,7 +174,7 @@ with main_tabs[2]:
                                     schedules[c].loc[p, d] = f"【{fixed_name}】"
                                     attr_schedules[c].loc[p, d] = "固定"
                     
-                    # 2. 建立與打亂排課池
+                    # 2. 建立與隨機洗牌排課池
                     lessons_pool = []
                     total_input_lessons = 0
                     for idx, row in st.session_state.teachers_data.iterrows():
@@ -202,11 +208,15 @@ with main_tabs[2]:
                         if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
                         if t in teacher_timetable[(d, p)]: return False 
                         
-                        # 💥 核心防禦：不論在哪個階段，該班級該科目今天已經排的堂數
-                        existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
                         required_slots = 2 if is_part_of_double else 1
                         
-                        # 🚨 鋼鐵指針：一天絕對不可超過 2 節，否則直接拒絕放入格子
+                        # 👨‍🏫 護欄 A：【老師限制】若放進去，該老師這天在全校總節數會不會破 5 節？
+                        current_teacher_lessons = teacher_daily_count.get(t, {}).get(d, 0)
+                        if (current_teacher_lessons + required_slots) > 5:
+                            return False
+                            
+                        # 🛡️ 護欄 B：【班級限制】該班級該科目今天已經排的堂數，加總不可破 2 節
+                        existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
                         if (existing_subject_today + required_slots) > 2: 
                             return False
 
@@ -251,7 +261,16 @@ with main_tabs[2]:
 
                     all_singles = [l for l in flat_lessons if not l["is_double"]] + leftover_singles
 
-                    # 第一階段
+                    # 輔助分配成功的更新器
+                    def book_slot(c, t, s, d, p, p_text, attr, is_double_part=1):
+                        schedules[c].loc[p, d] = f"{s}{p_text}\n({t})"
+                        attr_schedules[c].loc[p, d] = attr
+                        teacher_schedules[t].loc[p, d] = f"{s}{p_text}\n({c})"
+                        teacher_timetable[(d, p)].append(t)
+                        if t in teacher_daily_count:
+                            teacher_daily_count[t][d] += 1
+
+                    # 第一階段：排連堂
                     for lp in paired_doubles:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
                         placed = False
@@ -259,14 +278,8 @@ with main_tabs[2]:
                             for p1, p2 in valid_pairs:
                                 if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=1, ignore_domain=False) and \
                                    can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=1, ignore_domain=False):
-                                    schedules[c].loc[p1, d] = f"{s}\n({t})"
-                                    schedules[c].loc[p2, d] = f"{s}連\n({t})"
-                                    attr_schedules[c].loc[p1, d] = attr
-                                    attr_schedules[c].loc[p2, d] = attr
-                                    teacher_schedules[t].loc[p1, d] = f"{s}\n({c})"
-                                    teacher_schedules[t].loc[p2, d] = f"{s}連\n({c})"
-                                    teacher_timetable[(d, p1)].append(t)
-                                    teacher_timetable[(d, p2)].append(t)
+                                    book_slot(c, t, s, d, p1, "", attr)
+                                    book_slot(c, t, s, d, p2, "連", attr)
                                     placed = True
                                     break
                             if placed: break
@@ -274,6 +287,7 @@ with main_tabs[2]:
                             all_singles.append({"class": c, "teacher": t, "subject": s, "attr": attr})
                             all_singles.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
+                    # 理想單堂
                     for lp in all_singles:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
                         placed = False
@@ -281,10 +295,7 @@ with main_tabs[2]:
                         for d in sorted_days:
                             for p in periods:
                                 if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
+                                    book_slot(c, t, s, d, p, "", attr)
                                     placed = True
                                     break
                             if placed: break
@@ -299,10 +310,7 @@ with main_tabs[2]:
                         for d in sorted_days:
                             for p in periods:
                                 if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=2, ignore_domain=False):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
+                                    book_slot(c, t, s, d, p, "", attr)
                                     placed = True
                                     break
                             if placed: break
@@ -317,16 +325,13 @@ with main_tabs[2]:
                         for d in sorted_days:
                             for p in periods:
                                 if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=2, ignore_domain=True):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
+                                    book_slot(c, t, s, d, p, "", attr)
                                     placed = True
                                     break
                             if placed: break
                         if not placed: stage3_unplaced.append(lp)
 
-                    # 第四階段（特赦調度）
+                    # 第四階段
                     final_unplaced = []
                     for lp in stage3_unplaced:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
@@ -334,21 +339,17 @@ with main_tabs[2]:
                         for d in days:
                             for p in periods:
                                 if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=4, ignore_domain=True):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})\n[調整]"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
+                                    book_slot(c, t, s, d, p, "\n[調整]", attr)
                                     placed = True
                                     break
                             if placed: break
                         if not placed: final_unplaced.append(lp)
 
-                    # 💥💥💥 雙重指標終極二次驗證閘門 💥💥💥
-                    # 條件 1：沒有任何正課遺漏 (len(final_unplaced) == 0)
+                    # 💥💥💥 終極驗證閘門 💥💥
                     if len(final_unplaced) == 0:
                         success_fully_placed = True
                         
-                        # 通過正課考驗後，執行最終自習填補
+                        # 正課全數就位且完全無衝突後，執行「全校班級每日滿堂大體檢」
                         for c in class_list:
                             for d in days:
                                 for p in periods:
@@ -366,9 +367,9 @@ with main_tabs[2]:
                 status_text.empty()
 
                 if success_fully_placed:
-                    st.success(f"🏆 【迭代成功】已成功在第 {attempt} 次全校洗牌中，抓出正課 100% 成功排入且【單日相同科目不超2節】的完美解！")
+                    st.success(f"🏆 【成功解鎖完美課表】系統在第 {attempt} 次全校迭代重排中，成功滿足「班級同科不超2節」與「老師一天最多5節」的最高行政要求！")
                 else:
-                    st.error(f"❌ 系統隨機洗牌重排了 {max_attempts} 次，在不超過單日2節的嚴格防線下，正課仍會漏掉 {len(final_unplaced)} 節。這代表部分老師的每週總堂數過高，或某些班級特定主科每週開課總堂數太多（例如一週有11節英文課，勢必會引發單日破3節或衝堂）。請微調 Excel 總堂數或放寬限制！")
+                    st.error(f"❌ 系統隨機重排了 {max_attempts} 次，在【老師單日上限5節】的全新鋼鐵限制下，正課仍有 {len(final_unplaced)} 節課因時段卡死無法排入。這在數學上代表有些老師的總課堂數（例如一週24節課），除以5天後必然會天天超標或卡死。請放寬某些特殊不排課限制或調整兼代課節數！")
                     st.session_state.total_input_lessons = total_input_lessons
                     st.session_state.placed_count = total_input_lessons - len(final_unplaced)
                     st.session_state.final_unplaced = final_unplaced
@@ -377,19 +378,20 @@ with main_tabs[2]:
                 st.error("🚨 排課驗證核心發生異常錯誤！")
                 st.code(traceback.format_exc())
 
-        # 唯有當 final_unplaced 確定為 0（100% 成功且無超限）時，才顯示結果與提供下載按鈕！
+        # 唯有 100% 成功才放行下載與查閱
         if 'final_schedules' in st.session_state:
             if len(st.session_state.final_unplaced) > 0:
-                st.warning("⚠️ 由於排課結果未同時通過「100%排完」與「單日同科目不超2節」的行政安全標準，系統已依法扣留下載按鈕。")
-                with st.expander("🔍 檢視是哪些正課在重排中因防超限條款而卡死？"):
+                st.warning("⚠️ 排課結果未達 100% 完美，下載功能已依行政命令進行扣留。")
+                with st.expander("🔍 檢視是哪些正課在重排中因老師單日不超5節限制而卡死？"):
                     st.write(pd.DataFrame(st.session_state.final_unplaced))
             else:
                 st.balloons()
-                st.markdown("### 📊 100% 零缺陷 ＆ 防學生崩潰對帳看板")
-                col_m1, col_m2, col_m3 = st.columns(3)
-                with col_m1: st.metric(label="Excel 輸入學科堂數", value=f"{st.session_state.total_input_lessons} 節")
+                st.markdown("### 📊 100% 行政指標對帳看板")
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                with col_m1: st.metric(label="Excel 學科課節總數", value=f"{st.session_state.total_input_lessons} 節")
                 with col_m2: st.metric(label="全校學科排課率", value="100.0 % 🔥")
-                with col_m3: st.metric(label="全校單日同科上限", value="符合標準 (<= 2節) 🛡️")
+                with col_m3: st.metric(label="班級單日同科限制", value="符合 (<= 2節) 🛡️")
+                with col_m4: st.metric(label="老師單日全校課量", value="符合 (<= 5節) 👨‍🏫")
 
                 st.markdown("### 📅 網頁線上查閱")
                 view_mode = st.radio("請選擇查閱模式", ["看班級課表", "看老師個人課表"])
@@ -405,20 +407,4 @@ with main_tabs[2]:
                 def convert_excel():
                     output_buffer = io.BytesIO()
                     with pd.ExcelWriter(output_buffer) as writer:
-                        for c_name, c_table in st.session_state.final_schedules.items():
-                            clean_sheet_name = str(c_name).replace("/", "").replace("\\", "").replace("?", "").replace("*", "")[:20] + "_班"
-                            c_table.to_excel(writer, sheet_name=clean_sheet_name)
-                        for t_name, t_table in st.session_state.final_teacher_schedules.items():
-                            clean_sheet_name = str(t_name).replace("/", "").replace("\\", "").replace("?", "").replace("*", "")[:20] + "_師"
-                            t_table.to_excel(writer, sheet_name=clean_sheet_name)
-                    output_buffer.seek(0)
-                    return output_buffer.getvalue()
-
-                st.download_button(
-                    label="📥 匯出全校總課表 (Excel) - 已通過100%滿堂與防重複驗證",
-                    data=convert_excel(), 
-                    file_name="全校功課表總匯出結果_完美防護版.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True
-                )
+                        for c_name, c_table in st.session_state.final_
