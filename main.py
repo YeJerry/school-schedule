@@ -4,7 +4,7 @@ import io
 import random
 
 st.set_page_config(page_title="學校全自動排課系統 Pro", layout="centered")
-st.title("📱 學校自動排課系統 (零空堂、智慧自動降級版)")
+st.title("📱 學校自動排課系統 (終極零空堂、領域時間解禁版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -39,8 +39,8 @@ if not st.session_state.teachers_data.empty:
 
 # 側邊欄：單日上限 1 節科目設定
 st.sidebar.markdown("---")
-st.sidebar.header("🚫 第一原則：單日上限 1 節設定")
-st.sidebar.write("優先嘗試【一天最多1節】。若因此導致課表留空，系統會自動退讓至【一天最多2節】以確保課表完全補滿：")
+st.sidebar.header("🚫 限制優先級設定")
+st.sidebar.write("系統會優先嘗試所有限制。若導致課表留空，將依序放寬【單日上限】與【領域不排課時間】，確保 100% 補滿課表：")
 max_one_per_day_subjects = []
 for sub in existing_subjects:
     is_default = sub in ["數學", "英文", "國文"]
@@ -130,7 +130,7 @@ with main_tabs[2]:
         st.warning("請先完成資料匯入！")
     else:
         if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True):
-            with st.spinner("正在進行兩階段彈性優化排課，確保零空堂..."):
+            with st.spinner("正在執行三階段強制滿堂解鎖演算法，消滅所有空堂..."):
                 
                 # 初始化全校課表
                 schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
@@ -156,7 +156,7 @@ with main_tabs[2]:
                                 schedules[c].loc[p, d] = f"【{fixed_name}】"
                                 attr_schedules[c].loc[p, d] = "固定"
                 
-                # 建立隨機排課池
+                # 建立排課池
                 lessons_pool = []
                 for _, row in st.session_state.teachers_data.iterrows():
                     c, t, s, hours, attr = str(row["任教班級"]), str(row["老師姓名"]), str(row["科目"]), int(row["每週堂數"]), str(row["課程屬性"])
@@ -165,7 +165,7 @@ with main_tabs[2]:
                 
                 random.shuffle(lessons_pool)
 
-                # 展開成單堂與連排上課單位
+                # 展開上課單位
                 double_lessons = []
                 single_lessons = []
                 for lesson in lessons_pool:
@@ -176,15 +176,20 @@ with main_tabs[2]:
                     else:
                         for _ in range(hours): single_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
-                def can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1):
+                # 💥 核心改動：增加 ignore_domain 參數，允許在第三階段打破領域會議限制
+                def can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
                     slot_str = f"{d}_{p}"
                     if attr_schedules[c].loc[p, d] != "": return False
                     
-                    dom = subj_to_domain.get(s, s)
-                    if dom in st.session_state.domain_blocked_times and slot_str in st.session_state.domain_blocked_times[dom]: return False
+                    # 個人或班級特殊不排課 (如老師請假或兼行政)，這防線絕對不打破，防止肉體衝突
                     if t in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[t]: return False
                     if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
-                    if t in teacher_timetable[(d, p)]: return False
+                    if t in teacher_timetable[(d, p)]: return False # 老師該節已經有課，絕對不重疊
+                    
+                    # 💥 領域時間限制：如果 ignore_domain 為 False，嚴格遵守；若為 True，則在不得已時直接破除限制！
+                    if not ignore_domain:
+                        dom = subj_to_domain.get(s, s)
+                        if dom in st.session_state.domain_blocked_times and slot_str in st.session_state.domain_blocked_times[dom]: return False
                     
                     existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
                     required_slots = 2 if is_part_of_double else 1
@@ -212,7 +217,7 @@ with main_tabs[2]:
                             
                     return True
 
-                # 【第一階段：完美嘗試】
+                # 🎯 【第一階段：完美理想期】(strict_level=1, 守領域時間)
                 unplaced_double = []
                 unplaced_single = []
 
@@ -221,7 +226,7 @@ with main_tabs[2]:
                     placed = False
                     for d in days:
                         for p1, p2 in valid_pairs:
-                            if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=1) and can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=1):
+                            if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=1, ignore_domain=False) and can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=1, ignore_domain=False):
                                 schedules[c].loc[p1, d] = f"{s}\n({t})"
                                 schedules[c].loc[p2, d] = f"{s}連\n({t})"
                                 attr_schedules[c].loc[p1, d] = attr
@@ -241,7 +246,7 @@ with main_tabs[2]:
                     sorted_days = sorted(days, key=lambda day: sum(1 for l in schedules[c][day].values if s in str(l)))
                     for d in sorted_days:
                         for p in periods:
-                            if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1):
+                            if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
                                 schedules[c].loc[p, d] = f"{s}\n({t})"
                                 attr_schedules[c].loc[p, d] = attr
                                 teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
@@ -251,76 +256,21 @@ with main_tabs[2]:
                         if placed: break
                     if not placed: unplaced_single.append(lesson)
 
-                # 【第二階段：降級補滿】
+                # 🎯 【第二階段：主科放寬期】(strict_level=2, 依舊防守領域時間)
+                still_unplaced_double = []
+                still_unplaced_single = []
+                
                 if unplaced_double or unplaced_single:
                     for lesson in unplaced_double:
                         c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
                         placed = False
                         for d in days:
                             for p1, p2 in valid_pairs:
-                                if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=2) and can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=2):
+                                if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=2, ignore_domain=False) and can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=2, ignore_domain=False):
                                     schedules[c].loc[p1, d] = f"{s}\n({t})"
                                     schedules[c].loc[p2, d] = f"{s}連\n({t})"
                                     attr_schedules[c].loc[p1, d] = attr
                                     attr_schedules[c].loc[p2, d] = attr
                                     teacher_schedules[t].loc[p1, d] = f"{s}\n({c})"
                                     teacher_schedules[t].loc[p2, d] = f"{s}連\n({c})"
-                                    teacher_timetable[(d, p1)].append(t)
-                                    teacher_timetable[(d, p2)].append(t)
-                                    placed = True
-                                    break
-                            if placed: break
-
-                    for lesson in unplaced_single:
-                        c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
-                        placed = False
-                        sorted_days = sorted(days, key=lambda day: sum(1 for l in schedules[c][day].values if s in str(l)))
-                        for d in sorted_days:
-                            for p in periods:
-                                if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=2):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
-                                    placed = True
-                                    break
-                            if placed: break
-
-                st.success("🎉 智慧排課優化完成！落實第一原則：已全力補滿課表格子，杜絕任何空堂留白洞！")
-                st.session_state.final_schedules = schedules
-                st.session_state.final_teacher_schedules = teacher_schedules
-
-        # 顯示與匯出結果
-        if 'final_schedules' in st.session_state:
-            st.markdown("### 📅 網頁線上查閱")
-            view_mode = st.radio("請選擇查閱模式", ["看班級課表", "看老師個人課表"])
-            if view_mode == "看班級課表":
-                view_c = st.selectbox("選擇班級", class_list)
-                st.dataframe(st.session_state.final_schedules[view_c], use_container_width=True)
-            else:
-                view_t = st.selectbox("選擇老師", teacher_list)
-                st.dataframe(st.session_state.final_teacher_schedules[view_t], use_container_width=True)
-            
-            # 💥 修正後的終極穩定匯出機制
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                for c_name, c_table in st.session_state.final_schedules.items():
-                    # 防呆：強制將 Sheet 名稱切短至 25 字以內，避免 Excel 元件崩潰
-                    safe_sheet_name = f"{str(c_name)[:20]}_課表"
-                    c_table.to_excel(writer, sheet_name=safe_sheet_name)
-                for t_name, t_table in st.session_state.final_teacher_schedules.items():
-                    safe_sheet_name = f"{str(t_name)[:20]}_課表"
-                    t_table.to_excel(writer, sheet_name=safe_sheet_name)
-            
-            # 確保檔案指標回到最前端，供 Streamlit 下載讀取
-            output.seek(0)
-            
-            st.markdown("---")
-            st.download_button(
-                label="📥 匯出全校總課表 (Excel)",
-                data=output,
-                file_name="全校功課表總匯出結果.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary",
-                use_container_width=True
-            )
+                                    teacher_timetable[(d, p1)].append
