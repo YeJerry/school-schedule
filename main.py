@@ -130,4 +130,5 @@ with main_tabs[2]:
     if st.session_state.teachers_data.empty:
         st.warning("請先完成資料匯入！")
     else:
-        if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True
+        if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True)
+        
