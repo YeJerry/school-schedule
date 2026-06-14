@@ -4,8 +4,8 @@ import io
 import random
 import traceback
 
-st.set_page_config(page_title="學校全自動排課系統 100%驗證版", layout="centered")
-st.title("📱 學校自動排課系統 (100% 完美驗證成功才允許匯出版)")
+st.set_page_config(page_title="學校全自動排課系統 終極完美防禦版", layout="centered")
+st.title("📱 學校自動排課系統 (100%正課 ＋ 單日科目不超2節終極驗證版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -41,7 +41,7 @@ if not st.session_state.teachers_data.empty:
 # 側邊欄：單日上限 1 節科目設定
 st.sidebar.markdown("---")
 st.sidebar.header("🚫 限制優先級設定")
-st.sidebar.write("系統會自動執行隨機重排迭代，直到所有正課 100% 排入為止：")
+st.sidebar.write("系統會自動迭代重排。系統已強制規定：全校任何科目單日【絕對不可超過 2 節】。")
 max_one_per_day_subjects = []
 for sub in existing_subjects:
     is_default = sub in ["數學", "英文", "國文"]
@@ -132,19 +132,17 @@ with main_tabs[2]:
     else:
         if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True):
             try:
-                # 💥 核心改動：加入迭代控制機制
-                max_attempts = 200  # 最大嘗試洗牌重排次數
+                max_attempts = 300  # 提高隨機洗牌次數，因條件變嚴格
                 attempt = 0
                 success_fully_placed = False
                 
-                # 建立進度提示條
                 status_text = st.empty()
                 
                 while attempt < max_attempts:
                     attempt += 1
-                    status_text.markdown(f"⏳ 正在進行第 **{attempt}** 次全校洗牌校對，嘗試尋找 100% 完美解...")
+                    status_text.markdown(f"⏳ 正在進行第 **{attempt}** 次全校洗牌，嚴格驗證【100%排入】與【單日不超2節】...")
                     
-                    # 1. 初始化每一輪的全新課表（擦乾淨重來）
+                    # 1. 初始化每一輪的全新課表
                     schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
                     attr_schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
                     teacher_timetable = {(d, p): [] for d in days for p in periods}
@@ -188,7 +186,6 @@ with main_tabs[2]:
                         is_double = str(row.get("需要連排(對/錯)", "錯")).strip() == "對"
                         lessons_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "hours": hours, "is_double": is_double})
                     
-                    # 💥 關鍵：每一輪重排，隨機打亂的順序都不一樣！
                     random.shuffle(lessons_pool)
 
                     flat_lessons = []
@@ -197,6 +194,7 @@ with main_tabs[2]:
                         for _ in range(hours):
                             flat_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr, "is_double": is_double})
 
+                    # 核心規則檢查函數
                     def can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
                         slot_str = f"{d}_{p}"
                         if attr_schedules[c].loc[p, d] != "": return False 
@@ -204,24 +202,29 @@ with main_tabs[2]:
                         if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
                         if t in teacher_timetable[(d, p)]: return False 
                         
+                        # 💥 核心防禦：不論在哪個階段，該班級該科目今天已經排的堂數
+                        existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
+                        required_slots = 2 if is_part_of_double else 1
+                        
+                        # 🚨 鋼鐵指針：一天絕對不可超過 2 節，否則直接拒絕放入格子
+                        if (existing_subject_today + required_slots) > 2: 
+                            return False
+
                         if strict_level < 4:
                             if not ignore_domain:
                                 dom = subj_to_domain.get(s, s)
                                 if dom in st.session_state.domain_blocked_times and slot_str in st.session_state.domain_blocked_times[dom]: return False
-                            existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
-                            required_slots = 2 if is_part_of_double else 1
+                            
                             if s in max_one_per_day_subjects:
                                 if strict_level == 1:
                                     if not is_part_of_double and (existing_subject_today + required_slots) > 1: return False
                                     if is_part_of_double and existing_subject_today > 0: return False
-                                elif strict_level == 2:
-                                    if (existing_subject_today + required_slots) > 2: return False
-                            else:
-                                if (existing_subject_today + required_slots) > 2: return False
+                            
                             p_idx = periods.index(p)
                             if not is_part_of_double:
                                 if p_idx > 0 and s in str(schedules[c].loc[periods[p_idx-1], d]): return False
                                 if p_idx < len(periods) - 1 and s in str(schedules[c].loc[periods[p_idx+1], d]): return False
+                            
                             is_morning = p_idx < 4
                             half_day_periods = periods[:4] if is_morning else periods[4:]
                             existing_count = sum(1 for p_name in half_day_periods if attr_schedules[c].loc[p_name, d] == attr)
@@ -323,7 +326,7 @@ with main_tabs[2]:
                             if placed: break
                         if not placed: stage3_unplaced.append(lp)
 
-                    # 第四階段
+                    # 第四階段（特赦調度）
                     final_unplaced = []
                     for lp in stage3_unplaced:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
@@ -331,7 +334,7 @@ with main_tabs[2]:
                         for d in days:
                             for p in periods:
                                 if can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=4, ignore_domain=True):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})\n[調度調整]"
+                                    schedules[c].loc[p, d] = f"{s}\n({t})\n[調整]"
                                     attr_schedules[c].loc[p, d] = attr
                                     teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
                                     teacher_timetable[(d, p)].append(t)
@@ -340,13 +343,12 @@ with main_tabs[2]:
                             if placed: break
                         if not placed: final_unplaced.append(lp)
 
-                    # 💥💥💥 終極二次驗證閘門 💥💥💥
-                    # 檢查這一輪洗牌下來，有沒有任何一堂正課沒地方放？
+                    # 💥💥💥 雙重指標終極二次驗證閘門 💥💥💥
+                    # 條件 1：沒有任何正課遺漏 (len(final_unplaced) == 0)
                     if len(final_unplaced) == 0:
-                        # 恭喜！正課 100% 完美全數排完，正式打破重排迴圈！
                         success_fully_placed = True
                         
-                        # 最後關頭，才幫本來開課數就不夠的班級破洞格子填上自習，確保畫面天天滿堂
+                        # 通過正課考驗後，執行最終自習填補
                         for c in class_list:
                             for d in days:
                                 for p in periods:
@@ -360,15 +362,13 @@ with main_tabs[2]:
                         st.session_state.final_schedules = schedules
                         st.session_state.final_teacher_schedules = teacher_schedules
                         break
-                    
-                    # 如果有漏課 (len(final_unplaced) > 0)，迴圈不煞車，繼續進行下一次 random.shuffle 重排！
 
-                status_text.empty() # 清除進度文字
+                status_text.empty()
 
                 if success_fully_placed:
-                    st.success(f"🎉 狂賀！經過後端系統自動洗牌迭代，成功在第 **{attempt}** 次校對中找到【100% 零漏課】完美解！全校正課一堂不漏，准予匯出！")
+                    st.success(f"🏆 【迭代成功】已成功在第 {attempt} 次全校洗牌中，抓出正課 100% 成功排入且【單日相同科目不超2節】的完美解！")
                 else:
-                    st.error(f"❌ 系統自動洗牌重排了 {max_attempts} 次，正課依然會漏掉 {len(final_unplaced)} 節。這代表您設定的【不排課時間限制】或【老師兼代課節數】在數學上产生了絕對無解的死結（例如：某節課有5個班要上，但該領域只有4個老師且沒人有空）。請放寬不排課限制後再次嘗試！")
+                    st.error(f"❌ 系統隨機洗牌重排了 {max_attempts} 次，在不超過單日2節的嚴格防線下，正課仍會漏掉 {len(final_unplaced)} 節。這代表部分老師的每週總堂數過高，或某些班級特定主科每週開課總堂數太多（例如一週有11節英文課，勢必會引發單日破3節或衝堂）。請微調 Excel 總堂數或放寬限制！")
                     st.session_state.total_input_lessons = total_input_lessons
                     st.session_state.placed_count = total_input_lessons - len(final_unplaced)
                     st.session_state.final_unplaced = final_unplaced
@@ -377,21 +377,19 @@ with main_tabs[2]:
                 st.error("🚨 排課驗證核心發生異常錯誤！")
                 st.code(traceback.format_exc())
 
-        # 💥 唯有當 final_unplaced 確定為 0 時，才顯示結果與提供下載按鈕！
+        # 唯有當 final_unplaced 確定為 0（100% 成功且無超限）時，才顯示結果與提供下載按鈕！
         if 'final_schedules' in st.session_state:
-            
-            # 安全防禦：如果最終還是有漏課，隱藏下載鈕與結果
             if len(st.session_state.final_unplaced) > 0:
-                st.warning("⚠️ 由於目前排課率未達 100% 完美門檻，系統已依法扣留下載按鈕。請微調或減少限制條件，確保正課能 100% 排入。")
-                with st.expander("🔍 檢視是哪些正課在 200 次重排中依舊卡死衝堂？"):
+                st.warning("⚠️ 由於排課結果未同時通過「100%排完」與「單日同科目不超2節」的行政安全標準，系統已依法扣留下載按鈕。")
+                with st.expander("🔍 檢視是哪些正課在重排中因防超限條款而卡死？"):
                     st.write(pd.DataFrame(st.session_state.final_unplaced))
             else:
                 st.balloons()
-                st.markdown("### 📊 100% 零缺陷行政複核看板")
+                st.markdown("### 📊 100% 零缺陷 ＆ 防學生崩潰對帳看板")
                 col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1: st.metric(label="Excel 輸入學科堂數", value=f"{st.session_state.total_input_lessons} 節")
-                with col_m2: st.metric(label="成功配對上課堂數", value=f"{st.session_state.placed_count} 節")
-                with col_m3: st.metric(label="全校學科排課率", value="100.0 % 🔥")
+                with col_m2: st.metric(label="全校學科排課率", value="100.0 % 🔥")
+                with col_m3: st.metric(label="全校單日同科上限", value="符合標準 (<= 2節) 🛡️")
 
                 st.markdown("### 📅 網頁線上查閱")
                 view_mode = st.radio("請選擇查閱模式", ["看班級課表", "看老師個人課表"])
@@ -416,11 +414,10 @@ with main_tabs[2]:
                     output_buffer.seek(0)
                     return output_buffer.getvalue()
 
-                # 🏆 只有 100% 完美才會噴出這個按鈕！
                 st.download_button(
-                    label="📥 匯出全校總課表 (Excel) - 已通過100%滿堂複核",
+                    label="📥 匯出全校總課表 (Excel) - 已通過100%滿堂與防重複驗證",
                     data=convert_excel(), 
-                    file_name="全校功課表總匯出結果_100.xlsx",
+                    file_name="全校功課表總匯出結果_完美防護版.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary",
                     use_container_width=True
