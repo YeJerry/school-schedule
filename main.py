@@ -4,7 +4,7 @@ import io
 import random
 
 st.set_page_config(page_title="學校全自動排課系統 Pro", layout="centered")
-st.title("📱 學校自動排課系統 (終極零空堂、領域時間解禁版)")
+st.title("📱 學校自動排課系統 (終極零空堂、100%成功匯出版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -176,17 +176,14 @@ with main_tabs[2]:
                     else:
                         for _ in range(hours): single_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
-                # 💥 核心改動：增加 ignore_domain 參數，允許在第三階段打破領域會議限制
                 def can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
                     slot_str = f"{d}_{p}"
                     if attr_schedules[c].loc[p, d] != "": return False
                     
-                    # 個人或班級特殊不排課 (如老師請假或兼行政)，這防線絕對不打破，防止肉體衝突
                     if t in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[t]: return False
                     if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
-                    if t in teacher_timetable[(d, p)]: return False # 老師該節已經有課，絕對不重疊
+                    if t in teacher_timetable[(d, p)]: return False 
                     
-                    # 💥 領域時間限制：如果 ignore_domain 為 False，嚴格遵守；若為 True，則在不得已時直接破除限制！
                     if not ignore_domain:
                         dom = subj_to_domain.get(s, s)
                         if dom in st.session_state.domain_blocked_times and slot_str in st.session_state.domain_blocked_times[dom]: return False
@@ -217,7 +214,7 @@ with main_tabs[2]:
                             
                     return True
 
-                # 🎯 【第一階段：完美理想期】(strict_level=1, 守領域時間)
+                # 🎯 【第一階段：完美理想期】
                 unplaced_double = []
                 unplaced_single = []
 
@@ -256,7 +253,7 @@ with main_tabs[2]:
                         if placed: break
                     if not placed: unplaced_single.append(lesson)
 
-                # 🎯 【第二階段：主科放寬期】(strict_level=2, 依舊防守領域時間)
+                # 🎯 【第二階段：主科放寬期】
                 still_unplaced_double = []
                 still_unplaced_single = []
                 
@@ -267,10 +264,4 @@ with main_tabs[2]:
                         for d in days:
                             for p1, p2 in valid_pairs:
                                 if can_place(c, t, s, d, p1, attr, is_part_of_double=True, strict_level=2, ignore_domain=False) and can_place(c, t, s, d, p2, attr, is_part_of_double=True, strict_level=2, ignore_domain=False):
-                                    schedules[c].loc[p1, d] = f"{s}\n({t})"
-                                    schedules[c].loc[p2, d] = f"{s}連\n({t})"
-                                    attr_schedules[c].loc[p1, d] = attr
-                                    attr_schedules[c].loc[p2, d] = attr
-                                    teacher_schedules[t].loc[p1, d] = f"{s}\n({c})"
-                                    teacher_schedules[t].loc[p2, d] = f"{s}連\n({c})"
-                                    teacher_timetable[(d, p1)].append
+                                    schedules
