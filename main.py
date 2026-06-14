@@ -4,7 +4,7 @@ import io
 import random
 
 st.set_page_config(page_title="學校全自動排課系統 Pro", layout="centered")
-st.title("📱 學校自動排課系統 (大領域群組版)")
+st.title("📱 學校自動排課系統 (單日單科上限版)")
 
 # ----------------- 系統基本時段設定 -----------------
 st.sidebar.header("⚙️ 系統基本時段設定")
@@ -22,7 +22,7 @@ if 'teachers_data' not in st.session_state:
     st.session_state.teachers_data = pd.DataFrame(columns=["任教班級", "老師姓名", "科目", "每週堂數", "需要連排(對/錯)", "課程屬性", "所屬領域"])
 if 'blocked_times' not in st.session_state:
     st.session_state.blocked_times = {} 
-if 'domain_blocked_times' not in st.session_state: # 💥 升級：改為儲存「領域」的不排課時間
+if 'domain_blocked_times' not in st.session_state: 
     st.session_state.domain_blocked_times = {} 
 if 'fixed_lessons_by_grade' not in st.session_state:
     st.session_state.fixed_lessons_by_grade = {}
@@ -35,16 +35,18 @@ if not st.session_state.teachers_data.empty:
     if "所屬領域" in st.session_state.teachers_data.columns:
         existing_domains = sorted(list(set(st.session_state.teachers_data["所屬領域"].dropna().astype(str))))
     else:
-        existing_domains = existing_subjects # 防呆防錯
+        existing_domains = existing_subjects
 
-# 側邊欄設定：每日必排核心科目
+# 💥 修改功能：側邊欄改為讓行政人員勾選「一天最多只能有1節」的科目
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 每日必排核心科目")
-st.sidebar.write("請勾選希望各班【每天都一定要排到至少1節】的科目：")
-must_have_subjects = []
+st.sidebar.header("🚫 單日上限 1 節科目設定")
+st.sidebar.write("請勾選希望各班【一天最多只能排1節，絕對不重複】的科目（建議勾選國/英/數等主科）：")
+max_one_per_day_subjects = []
 for sub in existing_subjects:
-    if st.sidebar.checkbox(f"📌 天天有【{sub}】", value=(sub in ["數學"])):
-        must_have_subjects.append(sub)
+    # 預設勾選國文、英文、數學，組長可在網頁畫面上自行加勾或取消
+    is_default = sub in ["數學", "英文", "國文"]
+    if st.sidebar.checkbox(f"🛑 【{sub}】一天最多1節", value=is_default):
+        max_one_per_day_subjects.append(sub)
 
 # 操作分頁
 main_tabs = st.tabs(["📥 1. 匯入資料", "🚫 2. 各項排課限制設定", "🚀 3. 智慧排課與匯出"])
@@ -56,7 +58,7 @@ with main_tabs[0]:
     if uploaded_file is not None:
         st.session_state.teachers_data = pd.read_excel(uploaded_file)
         if "所屬領域" not in st.session_state.teachers_data.columns:
-            st.session_state.teachers_data["所屬領域"] = st.session_state.teachers_data["科目"] # 防呆補齊欄位
+            st.session_state.teachers_data["所屬領域"] = st.session_state.teachers_data["科目"]
         st.success("資料載入成功！")
     
     if not st.session_state.teachers_data.empty:
@@ -93,7 +95,7 @@ with main_tabs[1]:
                 
     st.markdown("---")
     
-    # 💥 2-2. 領域共同時間鎖定 (升級為大領域控管)
+    # 📌 2-2. 領域共同時間鎖定
     st.subheader("👥 2-2. 領域共同研習不排課設定 (一鍵鎖定整門領域)")
     if existing_domains:
         selected_dom = st.selectbox("選擇要設定共同研習的【所屬領域】", ["請選擇"] + existing_domains)
@@ -102,7 +104,7 @@ with main_tabs[1]:
             dom_day = st.selectbox("選擇領域會議星期幾", days, key="dom_day")
             new_dom_blocks = [b for b in st.session_state.domain_blocked_times[selected_dom] if not b.startswith(dom_day)]
             
-            st.write(f"請勾選 **{selected_dom}** 的共同研習時間（該領域所有科目在此時間都不排課）：")
+            st.write(f"請勾選 **{selected_dom}** 的共同研習時間：")
             for p in periods:
                 slot_id = f"{dom_day}_{p}"
                 is_checked = slot_id in st.session_state.domain_blocked_times[selected_dom]
@@ -132,170 +134,8 @@ with main_tabs[2]:
         st.warning("請先完成資料匯入！")
     else:
         if st.button("🔥 啟動高級領域平衡排課引擎", type="primary", use_container_width=True):
-            with st.spinner("大領域時間鎖定、考科穿插最佳化中..."):
+            with st.spinner("嚴格套用單日科目上限防護中..."):
                 
-                success = False
-                for attempt in range(10):
-                    schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
-                    attr_schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
-                    teacher_timetable = {(d, p): [] for d in days for p in periods}
-                    teacher_schedules = {t: pd.DataFrame("", index=periods, columns=days) for t in teacher_list}
-                    
-                    # 建立科目與領域的快速查照表
-                    subj_to_domain = {}
-                    for _, row in st.session_state.teachers_data.iterrows():
-                        subj_to_domain[str(row["科目"])] = str(row["所屬領域"])
-
-                    def get_fixed_lesson_for_class(c_name, d, p):
-                        for grade_prefix, slots in st.session_state.fixed_lessons_by_grade.items():
-                            if c_name.startswith(grade_prefix) and f"{d}_{p}" in slots: return slots[f"{d}_{p}"]
-                        return None
-
-                    # 優先填入固定課程
-                    for c in class_list:
-                        for d in days:
-                            for p in periods:
-                                fixed_name = get_fixed_lesson_for_class(c, d, p)
-                                if fixed_name:
-                                    schedules[c].loc[p, d] = f"【{fixed_name}】"
-                                    attr_schedules[c].loc[p, d] = "固定"
-                    
-                    # 建立排課池
-                    lessons_pool = []
-                    for _, row in st.session_state.teachers_data.iterrows():
-                        c, t, s, hours, attr = str(row["任教班級"]), str(row["老師姓名"]), str(row["科目"]), int(row["每週堂數"]), str(row["課程屬性"])
-                        is_double = str(row["需要連排(對/錯)"]) == "對"
-                        lessons_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "hours": hours, "is_double": is_double})
-                    
-                    random.shuffle(lessons_pool)
-                    lessons_pool.sort(key=lambda x: 0 if x["subject"] in must_have_subjects else 1)
-
-                    double_lessons = []
-                    single_lessons = []
-                    for lesson in lessons_pool:
-                        c, t, s, hours, attr, is_double = lesson["class"], lesson["teacher"], lesson["subject"], lesson["hours"], lesson["attr"], lesson["is_double"]
-                        if is_double:
-                            for _ in range(hours // 2): double_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr})
-                            if hours % 2 == 1: single_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr})
-                        else:
-                            for _ in range(hours): single_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr})
-
-                    def can_place(c, t, s, d, p, attr, is_part_of_double=False):
-                        slot_str = f"{d}_{p}"
-                        if attr_schedules[c].loc[p, d] != "": return False
-                        
-                        # 💥 核心修改：從科目找出領域，並檢查該「領域共同時間」是否被鎖定
-                        dom = subj_to_domain.get(s, s)
-                        if dom in st.session_state.domain_blocked_times and slot_str in st.session_state.domain_blocked_times[dom]: return False
-                        
-                        if t in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[t]: return False
-                        if c in st.session_state.blocked_times and slot_str in st.session_state.blocked_times[c]: return False
-                        if t in teacher_timetable[(d, p)]: return False
-                        
-                        existing_subject_today = sum(1 for lesson in schedules[c][d].values if s in str(lesson))
-                        required_slots = 2 if is_part_of_double else 1
-                        if (existing_subject_today + required_slots) > 2: return False
-                        
-                        p_idx = periods.index(p)
-                        if not is_part_of_double:
-                            if p_idx > 0 and s in str(schedules[c].loc[periods[p_idx-1], d]): return False
-                            if p_idx < len(periods) - 1 and s in str(schedules[c].loc[periods[p_idx+1], d]): return False
-
-                        is_morning = p_idx < 4
-                        half_day_periods = periods[:4] if is_morning else periods[4:]
-                        existing_count = sum(1 for p_name in half_day_periods if attr_schedules[c].loc[p_name, d] == attr)
-                        
-                        if attr == "考科" and (existing_count + required_slots) > 3: return False
-                        if attr == "藝能科" and (existing_count + required_slots) > 2: return False
-                                
-                        return True
-
-                    # A. 排連排課
-                    for lesson in double_lessons:
-                        c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
-                        placed = False
-                        for d in days:
-                            for p1, p2 in valid_pairs:
-                                if can_place(c, t, s, d, p1, attr, is_part_of_double=True) and can_place(c, t, s, d, p2, attr, is_part_of_double=True):
-                                    schedules[c].loc[p1, d] = f"{s}\n({t})"
-                                    schedules[c].loc[p2, d] = f"{s}連\n({t})"
-                                    attr_schedules[c].loc[p1, d] = attr
-                                    attr_schedules[c].loc[p2, d] = attr
-                                    teacher_schedules[t].loc[p1, d] = f"{s}\n({c})"
-                                    teacher_schedules[t].loc[p2, d] = f"{s}連\n({c})"
-                                    teacher_timetable[(d, p1)].append(t)
-                                    teacher_timetable[(d, p2)].append(t)
-                                    placed = True
-                                    break
-                            if placed: break
-
-                    # B. 排單堂課
-                    for lesson in single_lessons:
-                        c, t, s, attr = lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"]
-                        placed = False
-                        sorted_days = sorted(days, key=lambda day: sum(1 for l in schedules[c][day].values if s in str(l)))
-                        for d in sorted_days:
-                            for p in periods:
-                                if can_place(c, t, s, d, p, attr, is_part_of_double=False):
-                                    schedules[c].loc[p, d] = f"{s}\n({t})"
-                                    attr_schedules[c].loc[p, d] = attr
-                                    teacher_schedules[t].loc[p, d] = f"{s}\n({c})"
-                                    teacher_timetable[(d, p)].append(t)
-                                    placed = True
-                                    break
-                            if placed: break
-
-                    # 驗證步驟：天天主科檢查
-                    validation_passed = True
-                    for c in class_list:
-                        for d in days:
-                            for must_sub in must_have_subjects:
-                                total_hours_of_sub = st.session_state.teachers_data[(st.session_state.teachers_data["任教班級"]==c) & (st.session_state.teachers_data["科目"]==must_sub)]["每週堂數"].sum()
-                                if total_hours_of_sub >= 4:
-                                    has_sub_today = any(must_sub in str(val) for val in schedules[c][d].values)
-                                    if not has_sub_today:
-                                        validation_passed = False
-                                        break
-                            if not validation_passed: break
-                        if not validation_passed: break
-                    
-                    if validation_passed:
-                        success = True
-                        st.session_state.final_schedules = schedules
-                        st.session_state.final_teacher_schedules = teacher_schedules
-                        break
-                
-                if success:
-                    st.success("🎉 智慧排課完成！已成功阻斷大領域研習時段，完美防衝堂！")
-                else:
-                    st.session_state.final_schedules = schedules
-                    st.session_state.final_teacher_schedules = teacher_schedules
-                    st.warning("⚠️ 課表已建置完畢。由於大領域連帶限制較多，若有部分天數未完全達成天天有主科，已自動採用最高優化替代解。")
-
-        # 顯示與匯出結果
-        if 'final_schedules' in st.session_state:
-            st.markdown("### 📅 網頁線上查閱")
-            view_mode = st.radio("請選擇查閱模式", ["看班級課表", "看老師個人課表"])
-            if view_mode == "看班級課表":
-                view_c = st.selectbox("選擇班級", class_list)
-                st.dataframe(st.session_state.final_schedules[view_c], use_container_width=True)
-            else:
-                view_t = st.selectbox("選擇老師", teacher_list)
-                st.dataframe(st.session_state.final_teacher_schedules[view_t], use_container_width=True)
-            
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                for c_name, c_table in st.session_state.final_schedules.items():
-                    c_table.to_excel(writer, sheet_name=f"{c_name}_課表")
-                for t_name, t_table in st.session_state.final_teacher_schedules.items():
-                    t_table.to_excel(writer, sheet_name=f"{t_name}_課表")
-            
-            st.markdown("---")
-            st.download_button(
-                label="📥 匯出全校總課表 (Excel)",
-                data=output.getvalue(),
-                file_name="全校功課表總匯出結果.xlsx",
-                mime="application/vnd.ms-excel",
-                type="primary",
-                use_container_width=True
-            )
+                # 初始化課表結構
+                schedules = {c: pd.DataFrame("", index=periods, columns=days) for c in class_list}
+                attr_schedules = {c: pd.DataFrame("", index=periods, columns=days
