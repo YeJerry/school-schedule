@@ -68,24 +68,26 @@ with main_tabs[0]:
         st.markdown("**目前資料庫概況：**")
         st.dataframe(st.session_state.teachers_data, use_container_width=True)
 
-# --- 頁面 2：排課限制設定 ---
+# --- 頁面 2：排課限制設定（💥已全面修復範本與對齊欄位） ---
 with main_tabs[1]:
     st.subheader("📥 2-1. 快速匯入限制條件 Excel")
     st.markdown("💡 *您可以直接上傳排課限制表，免去手動逐筆勾選的麻煩。*")
     
+    # 修正後的範本資料結構（精準對齊分類、名稱、星期、節次、原因）
     example_df = pd.DataFrame([
-        {"對象分類": "個人/班級", "對意名稱": "陳大文", "星期": "週二", "節次": "第3節", "限制原因": "老師固定請假"},
-        {"對象分類": "領域研習", "對象名稱": "數學", "星期": "週三", "節次": "第5節", "限制原因": "領域會議"},
-        {"對象分類": "領域研習", "對象名稱": "數學", "星期": "週三", "節次": "第6節", "限制原因": "領域會議"}
+        {"對象分類": "個人/班級", "對象名稱": "陳大文", "星期": "週二", "節次": "第3節", "限制原因": "老師固定請假看診"},
+        {"對象分類": "個人/班級", "對象名稱": "701", "星期": "週五", "節次": "第7節", "限制原因": "外聘彈性課程"},
+        {"對象分類": "領域研習", "對象名稱": "數學", "星期": "週三", "節次": "第5節", "限制原因": "領域共同會議"},
+        {"對象分類": "領域研習", "對象名稱": "數學", "星期": "週三", "節次": "第6節", "限制原因": "領域共同會議"}
     ])
     towrite = io.BytesIO()
     example_df.to_excel(towrite, index=False, sheet_name="排課限制範例")
     towrite.seek(0)
     
     st.download_button(
-        label="📥 下載「排課限制 Excel 範例範本」",
+        label="📥 下載修正版「排課限制 Excel 範例範本」",
         data=towrite.getvalue(),
-        file_name="排課限制填寫範本.xlsx",
+        file_name="排課限制填寫範本_修正版.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
@@ -115,7 +117,7 @@ with main_tabs[1]:
                         success_count += 1
             st.success(f"🎉 限制條件匯入完成！成功解析並載入了 {success_count} 筆禁排時段規則！")
         except Exception as ex:
-            st.error(f"限制檔案解析失敗: {ex}")
+            st.error(f"限制檔案解析失敗，請確認欄位標題與範本完全一致。錯誤訊息: {ex}")
 
     st.markdown("---")
     st.subheader("🔍 2-2. 檢視與微調目前已生效限制")
@@ -163,7 +165,7 @@ with main_tabs[2]:
     else:
         if st.button("🔥 啟動高級階梯權重平衡排課引擎", type="primary", use_container_width=True):
             try:
-                max_attempts = 200  # 因為引入了啟發式排序，200次隨機洗牌已綽綽有餘
+                max_attempts = 200  
                 attempt = 0
                 success_fully_placed = False
                 
@@ -190,7 +192,6 @@ with main_tabs[2]:
                             if c_name.startswith(grade_prefix) and f"{d}_{p}" in slots: return slots[f"{d}_{p}"]
                         return None
 
-                    # 預先填入固定課程
                     for c in class_list:
                         for d in days:
                             for p in periods:
@@ -199,7 +200,6 @@ with main_tabs[2]:
                                     schedules[c].loc[p, d] = f"【{fixed_name}】"
                                     attr_schedules[c].loc[p, d] = "固定"
                     
-                    # 解析原始開課資料並展開
                     total_input_lessons = 0
                     all_flat_lessons = []
                     for idx, row in st.session_state.teachers_data.iterrows():
@@ -219,20 +219,14 @@ with main_tabs[2]:
                         for _ in range(hours):
                             all_flat_lessons.append({"class": c, "teacher": t, "subject": s, "attr": attr, "is_double": is_double})
 
-                    # 💥💥💥 核心亮點：結構化三階梯分流排序 💥💥💥
-                    # 梯隊 1：需要連排的大魔王課
                     tier1_doubles = [l for l in all_flat_lessons if l["is_double"]]
-                    # 梯隊 2：一般的精華考科單堂課
                     tier2_main_singles = [l for l in all_flat_lessons if not l["is_double"] and l["attr"] == "考科"]
-                    # 梯隊 3：最容易擺放的藝能學科與彈性課
                     tier3_art_singles = [l for l in all_flat_lessons if not l["is_double"] and l["attr"] == "藝能科"]
 
-                    # 為了避免排課過於死板，每個梯隊內部進行局部微調打亂（仍保有隨機的彈性）
                     random.shuffle(tier1_doubles)
                     random.shuffle(tier2_main_singles)
                     random.shuffle(tier3_art_singles)
 
-                    # 將局部打亂的連堂課組合成雙堂組
                     double_groups = {}
                     for lesson in tier1_doubles:
                         key = (lesson["class"], lesson["teacher"], lesson["subject"], lesson["attr"])
@@ -248,11 +242,9 @@ with main_tabs[2]:
                         for _ in range(singles):
                             leftover_singles_from_double.append({"class": key[0], "teacher": key[1], "subject": key[2], "attr": key[3]})
 
-                    # 把連堂落單的課，併入第二梯隊（考科單堂）一起處理
                     tier2_main_singles += leftover_singles_from_double
                     random.shuffle(tier2_main_singles)
 
-                    # 核心規則體檢函數
                     def can_place(c, t, s, d, p, attr, is_part_of_double=False, strict_level=1, ignore_domain=False):
                         slot_str = f"{d}_{p}"
                         if attr_schedules[c].loc[p, d] != "": return False 
@@ -300,7 +292,7 @@ with main_tabs[2]:
 
                     unplaced_pool = []
 
-                    # 🟦 執行排程階段一：全校第一個只排【連堂課大魔王】
+                    # 🟦 階段一：連堂課
                     for lp in paired_doubles:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
                         placed = False
@@ -314,11 +306,10 @@ with main_tabs[2]:
                                     break
                             if placed: break
                         if not placed:
-                            # 如果第一時間連堂放不進去，退化成兩個單堂，挪到未處理池中
-                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "stage": "退化單堂"})
-                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "stage": "退化單堂"})
+                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr})
+                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
-                    # 🟨 執行排程階段二：排【一般主要考科】
+                    # 🟨 階段二：精華考科單堂
                     for lp in tier2_main_singles:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
                         placed = False
@@ -330,10 +321,9 @@ with main_tabs[2]:
                                     placed = True
                                     break
                             if placed: break
-                        if not placed:
-                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "stage": "考科遺留"})
+                        if not placed: unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
-                    # 🟩 執行排程階段三：排【藝能科與彈性科目】
+                    # 🟩 階段三：藝能科
                     for lp in tier3_art_singles:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
                         placed = False
@@ -344,12 +334,10 @@ with main_tabs[2]:
                                     book_slot(c, t, s, d, p, "", attr)
                                     placed = True
                                     break
-                            if placed: break
-                        if not placed:
-                            unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr, "stage": "藝能科遺留"})
+                            if plated: break
+                        if not placed: unplaced_pool.append({"class": c, "teacher": t, "subject": s, "attr": attr})
 
-                    # 🚨 後續寬鬆救援階段（把上面遺留下來的課分級放寬硬塞）
-                    # 救援 1 (放寬早下午、放寬一天1節)
+                    # 🚨 後續寬鬆救援階段
                     stage2_unplaced = []
                     for lp in unplaced_pool:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
@@ -363,7 +351,6 @@ with main_tabs[2]:
                             if placed: break
                         if not placed: stage2_unplaced.append(lp)
 
-                    # 救援 2 (再放寬領域限制)
                     stage3_unplaced = []
                     for lp in stage2_unplaced:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
@@ -377,7 +364,6 @@ with main_tabs[2]:
                             if placed: break
                         if not placed: stage3_unplaced.append(lp)
 
-                    # 救援 3 (行政特赦，但絕對不打破 班級<=2節 與 老師<=5節 的底線)
                     final_unplaced = []
                     for lp in stage3_unplaced:
                         c, t, s, attr = lp["class"], lp["teacher"], lp["subject"], lp["attr"]
@@ -391,7 +377,6 @@ with main_tabs[2]:
                             if placed: break
                         if not placed: final_unplaced.append(lp)
 
-                    # 驗證完美解
                     if len(final_unplaced) == 0:
                         success_fully_placed = True
                         for c in class_list:
@@ -410,9 +395,9 @@ with main_tabs[2]:
                 status_text.empty()
 
                 if success_fully_placed:
-                    st.success(f"🏆 【策略排課大成功】系統利用「三階梯權重優先法」，在第 {attempt} 次全校洗牌就完美解鎖了！速度提升 10 倍！")
+                    st.success(f"🏆 【策略排課大成功】系統利用「三階梯權重優先法」，在第 {attempt} 次全校洗牌就完美解鎖了！")
                 else:
-                    st.error(f"❌ 迭代 {max_attempts} 次失敗，仍有 {len(final_unplaced)} 節課因雙向護欄而剩餘。請檢查是否有老師課表過滿或限制衝突。")
+                    st.error(f"❌ 迭代 {max_attempts} 次失敗，仍有 {len(final_unplaced)} 節課無法排入。")
                     st.session_state.total_input_lessons = total_input_lessons
                     st.session_state.placed_count = total_input_lessons - len(final_unplaced)
                     st.session_state.final_unplaced = final_unplaced
@@ -421,12 +406,9 @@ with main_tabs[2]:
                 st.error("🚨 排課驗證核心發生異常錯誤！")
                 st.code(traceback.format_exc())
 
-        # 唯有 100% 成功才放行下載與查閱
         if 'final_schedules' in st.session_state:
             if len(st.session_state.final_unplaced) > 0:
-                st.warning("⚠️ 排課結果未達 100% 完美，下載功能已依行政命令進行扣留。")
-                with st.expander("🔍 檢視是哪些正課在重排中卡死？"):
-                    st.write(pd.DataFrame(st.session_state.final_unplaced))
+                st.warning("⚠️ 排課結果未達 100% 完美，下載功能已進行扣留。")
             else:
                 st.balloons()
                 st.markdown("### 📊 100% 行政指標對帳看板")
